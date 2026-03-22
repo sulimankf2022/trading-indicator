@@ -1,0 +1,46 @@
+{
+  "indicator": {
+    "name": "Smart Zones Trading Indicator",
+    "version": "1.0.0",
+    "pine_version": 5
+  },
+  "zone_detection": {
+    "lookback_period": 20,
+    "min_touches_strong": 2,
+    "zone_width_pct": 0.5,
+    "show_zones": true,
+    "show_zone_labels": true,
+    "extend_zones_right": true
+  },
+  "signals": {
+    "show_signals": true,
+    "show_confidence": true,
+    "rsi_period": 14,
+    "rsi_overbought": 70,
+    "rsi_oversold": 30,
+    "use_volume_filter": true,
+    "volume_multiplier": 1.5
+  },
+  "visuals": {
+    "support_color": "rgba(0,128,0,0.2)",
+    "resistance_color": "rgba(255,0,0,0.2)",
+    "buy_signal_color": "#00FF00",
+    "sell_signal_color": "#FF0000",
+    "label_size": "normal"
+  },
+  "alerts": {
+    "price_approaching_zone": true,
+    "zone_breakout": true,
+    "new_signal": true,
+    "approach_threshold_pct": 0.3
+  },
+  "performance": {
+    "show_dashboard": true,
+    "dashboard_position": "Top Right",
+    "lookback_bars": 100
+  },
+  "timeframes": {
+    "supported": ["1", "5", "15", "30", "60", "240", "D"],
+    "recommended": ["15", "60", "240"]
+  }
+}

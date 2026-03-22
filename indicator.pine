@@ -1,0 +1,406 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// © sulimankf2022
+
+//@version=5
+indicator(title="Smart Zones Trading Indicator", shorttitle="SZTI", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// ============================================================
+// INPUT PARAMETERS
+// ============================================================
+
+// --- Zone Detection Settings ---
+grp_zones = "Zone Detection Settings"
+i_zone_lookback     = input.int(20,    "Zone Lookback Period",       minval=5,   maxval=200, group=grp_zones)
+i_zone_strength     = input.int(2,     "Min Touches for Strong Zone",minval=1,   maxval=10,  group=grp_zones)
+i_zone_width        = input.float(0.5, "Zone Width (%)",             minval=0.1, maxval=5.0, step=0.1, group=grp_zones)
+i_show_zones        = input.bool(true, "Show Support/Resistance Zones", group=grp_zones)
+i_show_zone_labels  = input.bool(true, "Show Zone Labels",           group=grp_zones)
+i_zone_extend       = input.bool(true, "Extend Zones to Right",      group=grp_zones)
+
+// --- Signal Settings ---
+grp_signals = "Signal Settings"
+i_show_signals      = input.bool(true,  "Show Trading Signals",       group=grp_signals)
+i_show_confidence   = input.bool(true,  "Show Confidence Level",      group=grp_signals)
+i_rsi_period        = input.int(14,     "RSI Period",                 minval=2, maxval=50, group=grp_signals)
+i_rsi_ob            = input.int(70,     "RSI Overbought Level",       minval=50, maxval=90, group=grp_signals)
+i_rsi_os            = input.int(30,     "RSI Oversold Level",         minval=10, maxval=50, group=grp_signals)
+i_volume_filter     = input.bool(true,  "Use Volume Confirmation",    group=grp_signals)
+i_volume_mult       = input.float(1.5,  "Volume Multiplier",          minval=1.0, maxval=5.0, step=0.1, group=grp_signals)
+
+// --- Visual Settings ---
+grp_visual = "Visual Settings"
+i_support_color     = input.color(color.new(color.green, 80), "Support Zone Color",    group=grp_visual)
+i_resist_color      = input.color(color.new(color.red, 80),   "Resistance Zone Color", group=grp_visual)
+i_buy_color         = input.color(color.lime,  "Buy Signal Color",  group=grp_visual)
+i_sell_color        = input.color(color.red,   "Sell Signal Color", group=grp_visual)
+i_label_size        = input.string("normal", "Label Size", options=["tiny","small","normal","large","huge"], group=grp_visual)
+
+// --- Alert Settings ---
+grp_alerts = "Alert Settings"
+i_alert_approach    = input.bool(true,  "Alert: Price Approaching Zone",  group=grp_alerts)
+i_alert_breakout    = input.bool(true,  "Alert: Zone Breakout",           group=grp_alerts)
+i_alert_signal      = input.bool(true,  "Alert: New Trading Signal",      group=grp_alerts)
+i_approach_pct      = input.float(0.3,  "Approach Threshold (%)",         minval=0.1, maxval=2.0, step=0.1, group=grp_alerts)
+
+// --- Performance Settings ---
+grp_perf = "Performance Metrics"
+i_show_stats        = input.bool(true,  "Show Performance Dashboard",     group=grp_perf)
+i_stats_position    = input.string("Top Right", "Dashboard Position", options=["Top Right","Top Left","Bottom Right","Bottom Left"], group=grp_perf)
+i_perf_lookback     = input.int(100,    "Performance Lookback (bars)",    minval=10, maxval=500, group=grp_perf)
+
+// ============================================================
+// HELPER FUNCTIONS
+// ============================================================
+
+// Convert label size string to size constant
+labelSize(sz) =>
+    switch sz
+        "tiny"   => size.tiny
+        "small"  => size.small
+        "large"  => size.large
+        "huge"   => size.huge
+        => size.normal
+
+// Volatility-adjusted zone width
+zoneHalfWidth() =>
+    atr = ta.atr(14)
+    math.max(atr * 0.5, close * i_zone_width / 100)
+
+// ============================================================
+// INDICATORS
+// ============================================================
+
+rsi_val     = ta.rsi(close, i_rsi_period)
+vol_avg     = ta.sma(volume, 20)
+atr_val     = ta.atr(14)
+ema_fast    = ta.ema(close, 9)
+ema_slow    = ta.ema(close, 21)
+macd_line   = ta.ema(close, 12) - ta.ema(close, 26)
+macd_signal = ta.ema(macd_line, 9)
+
+// ============================================================
+// PIVOT DETECTION
+// ============================================================
+
+pivot_high = ta.pivothigh(high, i_zone_lookback, i_zone_lookback)
+pivot_low  = ta.pivotlow(low,  i_zone_lookback, i_zone_lookback)
+
+// ============================================================
+// ZONE STATE (arrays for dynamic zone management)
+// ============================================================
+
+var float[] zone_levels  = array.new_float()
+var bool[]  zone_is_sup  = array.new_bool()
+var int[]   zone_touches = array.new_int()
+var bool[]  zone_active  = array.new_bool()
+var box[]   zone_boxes   = array.new_box()
+var label[] zone_labels  = array.new_label()
+
+// Max zones to track
+MAX_ZONES = 30
+
+// ============================================================
+// ZONE MANAGEMENT
+// ============================================================
+
+// Add a new zone (support or resistance) if not already tracked
+addZone(level, is_support) =>
+    half_w = zoneHalfWidth()
+    already_exists = false
+    if array.size(zone_levels) > 0
+        for i = 0 to array.size(zone_levels) - 1
+            if math.abs(array.get(zone_levels, i) - level) < half_w * 2
+                already_exists := true
+                array.set(zone_touches, i, array.get(zone_touches, i) + 1)
+                break
+    if not already_exists
+        // Remove oldest zone if at max capacity
+        if array.size(zone_levels) >= MAX_ZONES
+            array.shift(zone_levels)
+            array.shift(zone_is_sup)
+            array.shift(zone_touches)
+            array.shift(zone_active)
+            old_box = array.shift(zone_boxes)
+            box.delete(old_box)
+            old_lbl = array.shift(zone_labels)
+            label.delete(old_lbl)
+        array.push(zone_levels,  level)
+        array.push(zone_is_sup,  is_support)
+        array.push(zone_touches, 1)
+        array.push(zone_active,  true)
+        array.push(zone_boxes,   box.new(na, na, na, na))
+        array.push(zone_labels,  label.new(na, na, ""))
+
+// Register new pivots as zones
+if not na(pivot_high)
+    addZone(pivot_high, false)
+
+if not na(pivot_low)
+    addZone(pivot_low, true)
+
+// ============================================================
+// COUNT PRICE TOUCHES ON EXISTING ZONES
+// ============================================================
+
+half_w_current = zoneHalfWidth()
+
+if array.size(zone_levels) > 0
+    for i = 0 to array.size(zone_levels) - 1
+        lvl = array.get(zone_levels, i)
+        if math.abs(close - lvl) < half_w_current
+            array.set(zone_touches, i, array.get(zone_touches, i) + 1)
+
+// ============================================================
+// DRAW ZONES
+// ============================================================
+
+if i_show_zones and array.size(zone_levels) > 0
+    for i = 0 to array.size(zone_levels) - 1
+        if not array.get(zone_active, i)
+            continue
+        lvl       = array.get(zone_levels, i)
+        is_sup    = array.get(zone_is_sup, i)
+        touches   = array.get(zone_touches, i)
+        half_w    = zoneHalfWidth()
+        top_price = lvl + half_w
+        bot_price = lvl - half_w
+        zone_clr  = is_sup ? i_support_color : i_resist_color
+        border_clr = is_sup ? color.new(color.green, 20) : color.new(color.red, 20)
+        ext_right = i_zone_extend ? extend.right : extend.none
+
+        // Update or create box
+        b = array.get(zone_boxes, i)
+        box.delete(b)
+        new_box = box.new(bar_index - i_zone_lookback, top_price, bar_index, bot_price,
+             bgcolor=zone_clr, border_color=border_clr, border_width=1,
+             extend=ext_right)
+        array.set(zone_boxes, i, new_box)
+
+        // Zone strength label
+        if i_show_zone_labels
+            strength_txt = touches >= i_zone_strength ? "★ Strong" : "Weak"
+            zone_type    = is_sup ? "SUP" : "RES"
+            lbl_txt      = zone_type + " " + str.tostring(math.round(lvl, 2)) + "\n" + strength_txt + " (" + str.tostring(touches) + ")"
+            lbl_clr      = is_sup ? color.new(color.green, 0) : color.new(color.red, 0)
+            lbl = array.get(zone_labels, i)
+            label.delete(lbl)
+            new_lbl = label.new(bar_index, top_price, lbl_txt,
+                 color=lbl_clr, textcolor=color.white,
+                 style=label.style_label_left, size=labelSize(i_label_size))
+            array.set(zone_labels, i, new_lbl)
+
+// ============================================================
+// SIGNAL LOGIC
+// ============================================================
+
+// Find nearest support and resistance
+var float nearest_sup = na
+var float nearest_res = na
+var int   sup_touches = 0
+var int   res_touches = 0
+
+if array.size(zone_levels) > 0
+    nearest_sup := na
+    nearest_res := na
+    sup_dist    = 1e10
+    res_dist    = 1e10
+    for i = 0 to array.size(zone_levels) - 1
+        lvl    = array.get(zone_levels, i)
+        is_sup = array.get(zone_is_sup, i)
+        dist   = math.abs(close - lvl)
+        if is_sup and close >= lvl and dist < sup_dist
+            sup_dist    := dist
+            nearest_sup := lvl
+            sup_touches := array.get(zone_touches, i)
+        if not is_sup and close <= lvl and dist < res_dist
+            res_dist    := dist
+            nearest_res := lvl
+            res_touches := array.get(zone_touches, i)
+
+// Volume confirmation
+vol_confirm = not i_volume_filter or volume > vol_avg * i_volume_mult
+
+// Bounce from support (buy)
+bounce_sup = not na(nearest_sup) and
+     low <= nearest_sup + zoneHalfWidth() and
+     close > nearest_sup and
+     ta.crossover(close, ema_fast) and
+     rsi_val < i_rsi_ob and
+     vol_confirm
+
+// Rejection at resistance (sell) – price tests the zone but closes below it
+break_res  = not na(nearest_res) and
+     high >= nearest_res - zoneHalfWidth() and
+     close < nearest_res and
+     ta.crossunder(close, ema_fast) and
+     rsi_val > i_rsi_os and
+     vol_confirm
+
+// Confidence scoring
+signalConfidence(touches, rsi_ok, macd_ok, vol_ok) =>
+    score = 0
+    score += touches >= i_zone_strength ? 2 : 1
+    score += rsi_ok  ? 1 : 0
+    score += macd_ok ? 1 : 0
+    score += vol_ok  ? 1 : 0
+    score >= 4 ? "High" : score >= 3 ? "Medium" : "Low"
+
+buy_confidence  = signalConfidence(sup_touches, rsi_val < 50, macd_line > macd_signal, vol_confirm)
+sell_confidence = signalConfidence(res_touches, rsi_val > 50, macd_line < macd_signal, vol_confirm)
+
+// ============================================================
+// PLOT SIGNALS
+// ============================================================
+
+if i_show_signals
+    if bounce_sup
+        conf_txt = i_show_confidence ? "\n" + buy_confidence : ""
+        label.new(bar_index, low - atr_val,
+             "▲ BUY" + conf_txt, color=i_buy_color, textcolor=color.white,
+             style=label.style_label_up, size=labelSize(i_label_size))
+
+    if break_res
+        conf_txt = i_show_confidence ? "\n" + sell_confidence : ""
+        label.new(bar_index, high + atr_val,
+             "▼ SELL" + conf_txt, color=i_sell_color, textcolor=color.white,
+             style=label.style_label_down, size=labelSize(i_label_size))
+
+// Background highlight on signal bars
+bgcolor(bounce_sup ? color.new(color.lime, 90) : na, title="Buy Signal Background")
+bgcolor(break_res  ? color.new(color.red,  90) : na, title="Sell Signal Background")
+
+// ============================================================
+// EMA PLOTS
+// ============================================================
+
+plot(ema_fast, "EMA 9",  color=color.new(color.blue,   0), linewidth=1)
+plot(ema_slow, "EMA 21", color=color.new(color.orange, 0), linewidth=1)
+
+// ============================================================
+// PERFORMANCE DASHBOARD
+// ============================================================
+
+// Simple signal tracking for win-rate estimation
+var int  total_buys   = 0
+var int  total_sells  = 0
+var int  win_buys     = 0
+var int  win_sells    = 0
+var float last_buy_price  = na
+var float last_sell_price = na
+
+if bounce_sup
+    total_buys += 1
+    last_buy_price := close
+
+if break_res
+    total_sells += 1
+    last_sell_price := close
+
+// Win tracking: tracks each signal's outcome (approximate – tracks last signal per side)
+if not na(last_buy_price) and close > last_buy_price * 1.005
+    win_buys += 1
+    last_buy_price := na
+
+if not na(last_sell_price) and close < last_sell_price * 0.995
+    win_sells += 1
+    last_sell_price := na
+
+total_signals = total_buys + total_sells
+total_wins    = win_buys + win_sells
+win_rate      = total_signals > 0 ? (total_wins / total_signals) * 100 : 0.0
+
+// RR approximation: default 1:2 target (stop 1×ATR, target 2×ATR)
+rr_ratio = 2.0
+
+// Dashboard table
+if i_show_stats and barstate.islast
+    tbl_pos = switch i_stats_position
+        "Top Left"     => position.top_left
+        "Bottom Right" => position.bottom_right
+        "Bottom Left"  => position.bottom_left
+        => position.top_right
+
+    tbl = table.new(tbl_pos, 2, 7, bgcolor=color.new(color.navy, 10),
+         border_color=color.white, border_width=1, frame_color=color.white, frame_width=1)
+
+    table.cell(tbl, 0, 0, "📊 Performance",  text_color=color.white, text_size=size.small, bgcolor=color.new(color.blue, 30), text_halign=text.align_center)
+    table.cell(tbl, 1, 0, "Value",            text_color=color.white, text_size=size.small, bgcolor=color.new(color.blue, 30), text_halign=text.align_center)
+
+    table.cell(tbl, 0, 1, "Total Signals",   text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 1, str.tostring(total_signals), text_color=color.yellow, text_size=size.tiny)
+
+    table.cell(tbl, 0, 2, "Buy Signals",     text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 2, str.tostring(total_buys), text_color=color.lime, text_size=size.tiny)
+
+    table.cell(tbl, 0, 3, "Sell Signals",    text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 3, str.tostring(total_sells), text_color=color.red, text_size=size.tiny)
+
+    wr_color = win_rate >= 60 ? color.lime : win_rate >= 45 ? color.yellow : color.red
+    table.cell(tbl, 0, 4, "Win Rate",        text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 4, str.tostring(math.round(win_rate, 1)) + "%", text_color=wr_color, text_size=size.tiny)
+
+    table.cell(tbl, 0, 5, "Risk/Reward",     text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 5, "1:" + str.tostring(rr_ratio), text_color=color.aqua, text_size=size.tiny)
+
+    rsi_state = rsi_val >= i_rsi_ob ? "Overbought" : rsi_val <= i_rsi_os ? "Oversold" : "Neutral"
+    rsi_clr   = rsi_val >= i_rsi_ob ? color.red : rsi_val <= i_rsi_os ? color.lime : color.white
+    table.cell(tbl, 0, 6, "RSI State",       text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 6, rsi_state + " (" + str.tostring(math.round(rsi_val, 1)) + ")", text_color=rsi_clr, text_size=size.tiny)
+
+// ============================================================
+// ZONE BREAKOUT DETECTION
+// ============================================================
+
+var float prev_nearest_res = na
+var float prev_nearest_sup = na
+
+breakout_up   = not na(prev_nearest_res) and ta.crossover(close,  prev_nearest_res)
+breakout_down = not na(prev_nearest_sup) and ta.crossunder(close, prev_nearest_sup)
+
+prev_nearest_res := nearest_res
+prev_nearest_sup := nearest_sup
+
+if breakout_up
+    label.new(bar_index, high + atr_val * 1.5, "⚡ BREAKOUT UP",
+         color=color.new(color.orange, 0), textcolor=color.white,
+         style=label.style_label_down, size=size.small)
+
+if breakout_down
+    label.new(bar_index, low - atr_val * 1.5, "⚡ BREAKOUT DOWN",
+         color=color.new(color.purple, 0), textcolor=color.white,
+         style=label.style_label_up, size=size.small)
+
+// ============================================================
+// PRICE APPROACHING ZONE ALERTS
+// ============================================================
+
+approach_threshold = close * i_approach_pct / 100
+
+near_support    = not na(nearest_sup) and math.abs(close - nearest_sup) < approach_threshold
+near_resistance = not na(nearest_res) and math.abs(close - nearest_res) < approach_threshold
+
+// ============================================================
+// ALERTS
+// ============================================================
+
+if i_alert_signal and bounce_sup
+    alert("BUY Signal - Price bounced from support zone at " + str.tostring(math.round(nearest_sup, 2)) + " | Confidence: " + buy_confidence, alert.freq_once_per_bar)
+
+if i_alert_signal and break_res
+    alert("SELL Signal - Price broke resistance zone at " + str.tostring(math.round(nearest_res, 2)) + " | Confidence: " + sell_confidence, alert.freq_once_per_bar)
+
+if i_alert_approach and near_support
+    alert("⚠️ Price approaching SUPPORT zone at " + str.tostring(math.round(nearest_sup, 2)), alert.freq_once_per_bar)
+
+if i_alert_approach and near_resistance
+    alert("⚠️ Price approaching RESISTANCE zone at " + str.tostring(math.round(nearest_res, 2)), alert.freq_once_per_bar)
+
+if i_alert_breakout and breakout_up
+    alert("⚡ BREAKOUT UP through resistance at " + str.tostring(math.round(prev_nearest_res, 2)), alert.freq_once_per_bar)
+
+if i_alert_breakout and breakout_down
+    alert("⚡ BREAKOUT DOWN through support at " + str.tostring(math.round(prev_nearest_sup, 2)), alert.freq_once_per_bar)
+
+// ============================================================
+// END OF INDICATOR
+// ============================================================
