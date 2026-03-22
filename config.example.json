@@ -1,0 +1,62 @@
+{
+  "indicator": {
+    "name": "Smart Zones Trading Indicator",
+    "version": "1.0.0"
+  },
+  "zone_detection": {
+    "lookback_period": 20,
+    "min_touches_strong": 3,
+    "zone_width_pct": 0.4,
+    "show_zones": true,
+    "show_zone_labels": true,
+    "extend_zones_right": true
+  },
+  "signals": {
+    "show_signals": true,
+    "show_confidence": true,
+    "rsi_period": 14,
+    "rsi_overbought": 75,
+    "rsi_oversold": 25,
+    "use_volume_filter": true,
+    "volume_multiplier": 2.0
+  },
+  "visuals": {
+    "support_color": "rgba(0,200,0,0.15)",
+    "resistance_color": "rgba(255,50,50,0.15)",
+    "buy_signal_color": "#00E676",
+    "sell_signal_color": "#FF1744",
+    "label_size": "small"
+  },
+  "alerts": {
+    "price_approaching_zone": true,
+    "zone_breakout": true,
+    "new_signal": true,
+    "approach_threshold_pct": 0.25
+  },
+  "performance": {
+    "show_dashboard": true,
+    "dashboard_position": "Top Right",
+    "lookback_bars": 200
+  },
+  "timeframes": {
+    "supported": ["1", "5", "15", "30", "60", "240", "D"],
+    "recommended": ["15", "60", "240"],
+    "zone_adjustments": {
+      "1":   { "zone_width_multiplier": 0.5,  "lookback_multiplier": 0.5  },
+      "5":   { "zone_width_multiplier": 0.75, "lookback_multiplier": 0.75 },
+      "15":  { "zone_width_multiplier": 1.0,  "lookback_multiplier": 1.0  },
+      "30":  { "zone_width_multiplier": 1.25, "lookback_multiplier": 1.25 },
+      "60":  { "zone_width_multiplier": 1.5,  "lookback_multiplier": 1.5  },
+      "240": { "zone_width_multiplier": 2.0,  "lookback_multiplier": 2.0  },
+      "D":   { "zone_width_multiplier": 3.0,  "lookback_multiplier": 3.0  }
+    }
+  },
+  "backtesting": {
+    "initial_capital": 10000,
+    "position_size_pct": 2.0,
+    "stop_loss_atr_mult": 1.5,
+    "take_profit_atr_mult": 3.0,
+    "commission_pct": 0.1,
+    "slippage_pct": 0.05
+  }
+}
